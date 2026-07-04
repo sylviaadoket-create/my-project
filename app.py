@@ -54,10 +54,6 @@ def train_models():
     
     trained_models = {}
     for name, model in models.items():
-        pipeline = Pipeline(steps=[
-            ('imputer', SimpleImputer(strategy='median')),
-            ('classifier', model)
-        ])
         # Fit on already imputed data for simplicity in this flow
         model.fit(X_train, y_train)
         trained_models[name] = model
@@ -165,23 +161,27 @@ elif page == "Feature Importance & XAI":
     
     st.subheader("SHAP Summary Plot")
     
-    # FIX: Extract the actual classifier from the model if it's wrapped
-    # Check if model is the actual classifier or needs extraction
-    model_to_explain = model
-    
     try:
         # Create explainer based on model type
-        if hasattr(model_to_explain, 'tree_'):
-            explainer = shap.TreeExplainer(model_to_explain)
+        if selected_model_name in ['Random Forest', 'Gradient Boosting']:
+            explainer = shap.TreeExplainer(model)
+        elif selected_model_name == 'Logistic Regression':
+            explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
         else:
-            explainer = shap.LinearExplainer(model_to_explain, X_train, feature_perturbation="interventional")
+            # Fallback: try TreeExplainer first, then LinearExplainer
+            try:
+                explainer = shap.TreeExplainer(model)
+            except:
+                explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
         
         shap_values = explainer.shap_values(X_test)
         
         fig, ax = plt.subplots()
         if isinstance(shap_values, list):
+            # For tree-based models with binary classification
             shap.summary_plot(shap_values[1], X_test, show=False)
         else:
+            # For linear models or when shap_values is a 2D array
             shap.summary_plot(shap_values, X_test, show=False)
         st.pyplot(fig)
         
@@ -226,13 +226,16 @@ elif page == "Patient Prediction":
         st.subheader("SHAP Explanation")
         
         try:
-            # Create explainer
-            model_to_explain = model
-            
-            if hasattr(model_to_explain, 'tree_'):
-                explainer = shap.TreeExplainer(model_to_explain)
+            # Create explainer based on model type
+            if selected_model_name in ['Random Forest', 'Gradient Boosting']:
+                explainer = shap.TreeExplainer(model)
+            elif selected_model_name == 'Logistic Regression':
+                explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
             else:
-                explainer = shap.LinearExplainer(model_to_explain, X_train, feature_perturbation="interventional")
+                try:
+                    explainer = shap.TreeExplainer(model)
+                except:
+                    explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
             
             # Calculate SHAP values
             shap_values = explainer.shap_values(input_data)
@@ -241,19 +244,21 @@ elif page == "Patient Prediction":
             if isinstance(shap_values, list):
                 # For tree-based models with binary classification
                 shap_vals = shap_values[1][0]  # Get SHAP values for positive class, first sample
+                base_value = explainer.expected_value[1]
             else:
                 # For linear models or when shap_values is a 2D array
                 if len(shap_values.shape) == 2:
                     shap_vals = shap_values[0]  # First sample
                 else:
                     shap_vals = shap_values
+                base_value = explainer.expected_value
             
             # Create waterfall plot
             fig, ax = plt.subplots(figsize=(10, 6))
             shap.plots.waterfall(
                 shap.Explanation(
                     values=shap_vals,
-                    base_values=explainer.expected_value[1] if isinstance(explainer.expected_value, list) else explainer.expected_value,
+                    base_values=base_value,
                     data=input_data.values[0],
                     feature_names=features
                 ),
