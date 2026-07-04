@@ -1,3 +1,195 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import shap
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, RocCurveDisplay
+
+warnings.filterwarnings('ignore')
+
+# ==========================================
+# 1. DATA LOADING & PREPROCESSING
+# ==========================================
+@st.cache_data
+def load_data():
+    # Ensure your CSV is named 'htn_dat.csv' and has headers
+    df = pd.read_csv('htn_dat.csv')
+    return df
+
+df = load_data()
+
+# Define features and target based on your dataset structure
+target = 'event'
+features = ['DBP', 'SBP', 'BMI', 'age', 'married', 'male.gender', 'hgb_centered', 
+            'adv_HIV', 'arv_naive', 'urban.clinic', 'log_creat_centered', 'SBP_ge120']
+
+X = df[features]
+y = df[target]
+
+# Handle missing values
+imputer = SimpleImputer(strategy='median')
+X_imputed = pd.DataFrame(imputer.fit_transform(X), columns=features)
+
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(X_imputed, y, test_size=0.2, random_state=42)
+
+# ==========================================
+# 2. MODEL TRAINING (Cached for Performance)
+# ==========================================
+@st.cache_resource
+def train_models():
+    """Trains models on first load and caches them."""
+    models = {
+        'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
+        'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
+        'Gradient Boosting': GradientBoostingClassifier(n_estimators=100, random_state=42)
+    }
+    
+    trained_models = {}
+    for name, model in models.items():
+        # Fit on already imputed data for simplicity in this flow
+        model.fit(X_train, y_train)
+        trained_models[name] = model
+        
+    return trained_models
+
+models = train_models()
+
+# ==========================================
+# 3. STREAMLIT UI LAYOUT
+# ==========================================
+st.set_page_config(page_title="HTN Clinical Dashboard", layout="wide", page_icon="🩺")
+
+st.sidebar.title("🩺 Navigation")
+page = st.sidebar.radio("Go to", [
+    "Home / Overview",
+    "Exploratory Data Analysis",
+    "Model Performance & Metrics",
+    "Feature Importance & XAI",
+    "Patient Prediction"
+])
+
+st.sidebar.markdown("---")
+selected_model_name = st.sidebar.selectbox("Select Model", list(models.keys()))
+model = models[selected_model_name]
+
+# ==========================================
+# 4. PAGES
+# ==========================================
+
+# --- HOME ---
+if page == "Home / Overview":
+    st.title("🏥 HTN Clinical Event Prediction Dashboard")
+    st.markdown("""
+    Welcome to the **Hypertension & Clinical Event Prediction Dashboard**.
+    This application uses machine learning to predict the probability of a clinical event (`event`)
+    based on patient demographics, vitals, and medical history.
+    
+    **Features:** `DBP`, `SBP`, `BMI`, `age`, `married`, `male.gender`, `hgb_centered`, `adv_HIV`, `arv_naive`, `urban.clinic`, `log_creat_centered`, `SBP_ge120`.
+    """)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Patients", len(df))
+    with col2:
+        st.metric("Events", int(y.sum()))
+    with col3:
+        st.metric("Event Rate", f"{y.mean()*100:.1f}%")
+
+# --- EDA ---
+elif page == "Exploratory Data Analysis":
+    st.title("📊 Exploratory Data Analysis")
+    st.subheader("Dataset Preview")
+    st.dataframe(df.head())
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Target Distribution")
+        fig, ax = plt.subplots()
+        sns.countplot(x='event', data=df, ax=ax, palette='Set2')
+        st.pyplot(fig)
+    with col2:
+        st.subheader("Age Distribution")
+        fig, ax = plt.subplots()
+        sns.histplot(data=df, x='age', hue='event', kde=True, ax=ax, palette='Set2')
+        st.pyplot(fig)
+
+# --- PERFORMANCE ---
+elif page == "Model Performance & Metrics":
+    st.title(f"📈 Model Performance: {selected_model_name}")
+    
+    y_pred = model.predict(X_test)
+    y_prob = model.predict_proba(X_test)[:, 1]
+    
+    metrics = {
+        'Accuracy': accuracy_score(y_test, y_pred),
+        'Precision': precision_score(y_test, y_pred),
+        'Recall': recall_score(y_test, y_pred),
+        'F1-Score': f1_score(y_test, y_pred),
+        'ROC-AUC': roc_auc_score(y_test, y_prob)
+    }
+    
+    st.subheader("Evaluation Metrics")
+    st.table(pd.DataFrame.from_dict(metrics, orient='index', columns=['Score']))
+    
+    st.subheader("ROC Curve")
+    fig, ax = plt.subplots()
+    RocCurveDisplay.from_predictions(y_test, y_prob, ax=ax, name=selected_model_name)
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    st.pyplot(fig)
+
+# --- XAI ---
+elif page == "Feature Importance & XAI":
+    st.title(f"🔍 Feature Importance & XAI: {selected_model_name}")
+    
+    # Get feature importances
+    if hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+    else:
+        importances = np.abs(model.coef_[0])
+        
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(x=importances, y=features, ax=ax, palette='viridis')
+    st.pyplot(fig)
+    
+    st.subheader("SHAP Summary Plot")
+    
+    try:
+        # Create explainer based on model type
+        if selected_model_name in ['Random Forest', 'Gradient Boosting']:
+            explainer = shap.TreeExplainer(model)
+        elif selected_model_name == 'Logistic Regression':
+            explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
+        else:
+            # Fallback: try TreeExplainer first, then LinearExplainer
+            try:
+                explainer = shap.TreeExplainer(model)
+            except:
+                explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
+        
+        shap_values = explainer.shap_values(X_test)
+        
+        fig, ax = plt.subplots()
+        if isinstance(shap_values, list):
+            # For tree-based models with binary classification
+            shap.summary_plot(shap_values[1], X_test, show=False)
+        else:
+            # For linear models or when shap_values is a 2D array
+            shap.summary_plot(shap_values, X_test, show=False)
+        st.pyplot(fig)
+        
+    except Exception as e:
+        st.error(f"Error generating SHAP summary plot: {str(e)}")
+        st.info("SHAP summary plot could not be generated for this model.")
+
+# --- PREDICTION ---
 elif page == "Patient Prediction":
     st.title("👤 Patient Prediction")
     st.markdown("Enter patient details to predict risk.")
@@ -53,16 +245,12 @@ elif page == "Patient Prediction":
                 # For tree-based models with binary classification
                 shap_vals = shap_values[1][0]  # Get SHAP values for positive class, first sample
                 base_value = explainer.expected_value[1]
-            elif len(shap_values.shape) == 3:
-                # Shape is (n_samples, n_features, n_classes)
-                shap_vals = shap_values[0, :, 1]  # First sample, all features, positive class
-                base_value = explainer.expected_value[1] if hasattr(explainer.expected_value, '__len__') else explainer.expected_value
-            elif len(shap_values.shape) == 2:
-                # Shape is (n_samples, n_features)
-                shap_vals = shap_values[0]  # First sample
-                base_value = explainer.expected_value
             else:
-                shap_vals = shap_values
+                # For linear models or when shap_values is a 2D array
+                if len(shap_values.shape) == 2:
+                    shap_vals = shap_values[0]  # First sample
+                else:
+                    shap_vals = shap_values
                 base_value = explainer.expected_value
             
             # Create waterfall plot
