@@ -212,12 +212,41 @@ elif page == "Patient Prediction":
         
         # SHAP Waterfall for prediction
         st.subheader("SHAP Explanation")
-        explainer = shap.TreeExplainer(model) if hasattr(model, 'tree_') else shap.LinearExplainer(model, X_train)
-        shap_values = explainer.shap_values(input_data)
         
-        fig, ax = plt.subplots()
-        if isinstance(shap_values, list):
-            shap.plots.waterfall(shap_values[1][0], show=False)
-        else:
-            shap.plots.waterfall(shap_values[0], show=False)
-        st.pyplot(fig)
+        try:
+            # Create explainer
+            if hasattr(model, 'tree_'):
+                explainer = shap.TreeExplainer(model)
+            else:
+                explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
+            
+            # Calculate SHAP values
+            shap_values = explainer.shap_values(input_data)
+            
+            # Handle different SHAP value formats
+            if isinstance(shap_values, list):
+                # For tree-based models with binary classification
+                shap_vals = shap_values[1][0]  # Get SHAP values for positive class, first sample
+            else:
+                # For linear models or when shap_values is a 2D array
+                if len(shap_values.shape) == 2:
+                    shap_vals = shap_values[0]  # First sample
+                else:
+                    shap_vals = shap_values
+            
+            # Create waterfall plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+            shap.plots.waterfall(
+                shap.Explanation(
+                    values=shap_vals,
+                    base_values=explainer.expected_value[1] if isinstance(explainer.expected_value, list) else explainer.expected_value,
+                    data=input_data.values[0],
+                    feature_names=features
+                ),
+                show=False
+            )
+            st.pyplot(fig)
+            
+        except Exception as e:
+            st.error(f"Error generating SHAP explanation: {str(e)}")
+            st.info("SHAP explanation could not be generated for this prediction.")
