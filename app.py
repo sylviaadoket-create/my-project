@@ -55,13 +55,11 @@ def train_models():
     trained_models = {}
     for name, model in models.items():
         pipeline = Pipeline(steps=[
-            ('imputer', SimpleImputer(strategy='median')), # Note: Data is already imputed above, but for new input we need this
+            ('imputer', SimpleImputer(strategy='median')),
             ('classifier', model)
         ])
-        # Since X_imputed is already imputed, we just fit the model part for evaluation
-        # But for the pipeline to work on NEW data, we need the full pipeline
-        # Let's refit on raw X_train to ensure the pipeline handles imputation correctly
-        model.fit(X_train, y_train) # Fit on already imputed data for simplicity in this flow
+        # Fit on already imputed data for simplicity in this flow
+        model.fit(X_train, y_train)
         trained_models[name] = model
         
     return trained_models
@@ -147,14 +145,13 @@ elif page == "Model Performance & Metrics":
     
     st.subheader("ROC Curve")
     fig, ax = plt.subplots()
-    # FIX: Removed 'color' parameter to prevent TypeError
     RocCurveDisplay.from_predictions(y_test, y_prob, ax=ax, name=selected_model_name)
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
     st.pyplot(fig)
 
 # --- XAI ---
 elif page == "Feature Importance & XAI":
-    st.title(f" Feature Importance & XAI: {selected_model_name}")
+    st.title(f"🔍 Feature Importance & XAI: {selected_model_name}")
     
     # Get feature importances
     if hasattr(model, 'feature_importances_'):
@@ -167,19 +164,34 @@ elif page == "Feature Importance & XAI":
     st.pyplot(fig)
     
     st.subheader("SHAP Summary Plot")
-    explainer = shap.TreeExplainer(model) if hasattr(model, 'tree_') else shap.LinearExplainer(model, X_train)
-    shap_values = explainer.shap_values(X_test)
     
-    fig, ax = plt.subplots()
-    if isinstance(shap_values, list):
-        shap.summary_plot(shap_values[1], X_test, show=False)
-    else:
-        shap.summary_plot(shap_values, X_test, show=False)
-    st.pyplot(fig)
+    # FIX: Extract the actual classifier from the model if it's wrapped
+    # Check if model is the actual classifier or needs extraction
+    model_to_explain = model
+    
+    try:
+        # Create explainer based on model type
+        if hasattr(model_to_explain, 'tree_'):
+            explainer = shap.TreeExplainer(model_to_explain)
+        else:
+            explainer = shap.LinearExplainer(model_to_explain, X_train, feature_perturbation="interventional")
+        
+        shap_values = explainer.shap_values(X_test)
+        
+        fig, ax = plt.subplots()
+        if isinstance(shap_values, list):
+            shap.summary_plot(shap_values[1], X_test, show=False)
+        else:
+            shap.summary_plot(shap_values, X_test, show=False)
+        st.pyplot(fig)
+        
+    except Exception as e:
+        st.error(f"Error generating SHAP summary plot: {str(e)}")
+        st.info("SHAP summary plot could not be generated for this model.")
 
 # --- PREDICTION ---
 elif page == "Patient Prediction":
-    st.title(" Patient Prediction")
+    st.title("👤 Patient Prediction")
     st.markdown("Enter patient details to predict risk.")
     
     col1, col2 = st.columns(2)
@@ -215,10 +227,12 @@ elif page == "Patient Prediction":
         
         try:
             # Create explainer
-            if hasattr(model, 'tree_'):
-                explainer = shap.TreeExplainer(model)
+            model_to_explain = model
+            
+            if hasattr(model_to_explain, 'tree_'):
+                explainer = shap.TreeExplainer(model_to_explain)
             else:
-                explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
+                explainer = shap.LinearExplainer(model_to_explain, X_train, feature_perturbation="interventional")
             
             # Calculate SHAP values
             shap_values = explainer.shap_values(input_data)
