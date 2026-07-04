@@ -11,24 +11,24 @@ from sklearn.metrics import RocCurveDisplay
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. LOAD ARTIFACTS
+# 1. LOAD ARTIFACTS (from root directory)
 # ==========================================
 @st.cache_resource
 def load_artifacts():
-    metrics = joblib.load('saved_models/metrics.joblib')
-    X_test = joblib.load('saved_models/X_test.joblib')
-    y_test = joblib.load('saved_models/y_test.joblib')
-    features = joblib.load('saved_models/features.joblib')
+    metrics = joblib.load('metrics.joblib')
+    X_test = joblib.load('X_test.joblib')
+    y_test = joblib.load('y_test.joblib')
+    features = joblib.load('features.joblib')
+    X_train_transformed = joblib.load('X_train_transformed.joblib')
 
-    model_names = ['Logistic Regression', 'Random Forest', 'Gradient Boosting']
-    pipelines = {}
-    for name in model_names:
-        safe_name = name.replace(' ', '_')
-        pipelines[name] = joblib.load(f'saved_models/{safe_name}_pipeline.joblib')
+    pipelines = {
+        'Logistic Regression': joblib.load('Logistic_Regression_pipeline.joblib'),
+        'Random Forest': joblib.load('Random_Forest_pipeline.joblib'),
+        'Gradient Boosting': joblib.load('Gradient_Boosting_pipeline.joblib')
+    }
+    return metrics, X_test, y_test, features, pipelines, X_train_transformed
 
-    return metrics, X_test, y_test, features, pipelines
-
-metrics, X_test, y_test, features, pipelines = load_artifacts()
+metrics, X_test, y_test, features, pipelines, X_train_transformed = load_artifacts()
 
 @st.cache_data
 def load_raw_data():
@@ -39,26 +39,28 @@ df_raw = load_raw_data()
 # ==========================================
 # 2. STREAMLIT UI
 # ==========================================
-st.set_page_config(page_title="Clinical Event Prediction Dashboard", layout="wide")
+st.set_page_config(page_title="Clinical Event Prediction Dashboard", layout="wide", page_icon="")
 
-st.sidebar.title("Navigation")
+st.sidebar.title(" Navigation")
 page = st.sidebar.radio("Go to", [
-    "Home / Overview",
-    "Exploratory Data Analysis",
-    "Model Performance & Metrics",
-    "Feature Importance & XAI",
-    "Patient Prediction"
+    "🏠 Home / Overview",
+    "📊 Exploratory Data Analysis",
+    "📈 Model Performance & Metrics",
+    "🔍 Feature Importance & XAI",
+    "🩺 Patient Prediction"
 ])
 
 st.sidebar.markdown("---")
-selected_model_name = st.sidebar.selectbox("Select Model", list(pipelines.keys()))
+selected_model_name = st.sidebar.selectbox("⚙️ Select Model", list(pipelines.keys()))
+pipeline = pipelines[selected_model_name]
 
 # ==========================================
 # 3. PAGES
 # ==========================================
 
-if page == "Home / Overview":
-    st.title("Clinical Event Prediction Dashboard")
+# ---------- HOME ----------
+if page == "🏠 Home / Overview":
+    st.title("🏥 Clinical Event Prediction Dashboard")
     st.markdown("""
     Welcome to the **Hypertension & Clinical Event Prediction Dashboard**.
 
@@ -77,16 +79,18 @@ if page == "Home / Overview":
     5. Predict risk for a new patient in **Patient Prediction**.
     """)
 
+    st.metric("Total Patients", len(df_raw))
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Total Patients", len(df_raw))
-    with col2:
         st.metric("Events (1)", int(df_raw['event'].sum()))
-    with col3:
+    with col2:
         st.metric("Non-Events (0)", int((df_raw['event'] == 0).sum()))
+    with col3:
+        st.metric("Event Rate", f"{df_raw['event'].mean()*100:.1f}%")
 
-elif page == "Exploratory Data Analysis":
-    st.title("Exploratory Data Analysis")
+# ---------- EDA ----------
+elif page == "📊 Exploratory Data Analysis":
+    st.title(" Exploratory Data Analysis")
 
     st.subheader("Dataset Preview")
     st.dataframe(df_raw.head(10))
@@ -114,10 +118,10 @@ elif page == "Exploratory Data Analysis":
     st.pyplot(fig)
     plt.close(fig)
 
-elif page == "Model Performance & Metrics":
-    st.title(f"Model Performance: {selected_model_name}")
+# ---------- MODEL PERFORMANCE ----------
+elif page == "📈 Model Performance & Metrics":
+    st.title(f"📈 Model Performance: {selected_model_name}")
 
-    pipeline = pipelines[selected_model_name]
     y_pred = pipeline.predict(X_test)
     y_prob = pipeline.predict_proba(X_test)[:, 1]
 
@@ -149,13 +153,14 @@ elif page == "Model Performance & Metrics":
     all_metrics = pd.DataFrame(metrics).T
     st.dataframe(all_metrics.style.format("{:.4f}"), use_container_width=True)
 
-elif page == "Feature Importance & XAI":
-    st.title(f"Feature Importance & XAI: {selected_model_name}")
+# ---------- FEATURE IMPORTANCE & XAI ----------
+elif page == "🔍 Feature Importance & XAI":
+    st.title(f" Feature Importance & XAI: {selected_model_name}")
 
-    pipeline = pipelines[selected_model_name]
-    model = pipeline.named_steps['classifier']
-    preprocessor = pipeline.named_steps['preprocessor']
-    X_test_transformed = preprocessor.transform(X_test)
+    model = pipeline.named_steps['classifier'] if hasattr(pipeline, 'named_steps') else pipeline
+    preprocessor = pipeline.named_steps['preprocessor'] if hasattr(pipeline, 'named_steps') else None
+
+    X_test_transformed = preprocessor.transform(X_test) if preprocessor is not None else X_test
 
     st.subheader("Global Feature Importance")
     if hasattr(model, 'feature_importances_'):
@@ -177,24 +182,23 @@ elif page == "Feature Importance & XAI":
         if hasattr(model, 'tree_'):
             explainer = shap.TreeExplainer(model)
         else:
-            explainer = shap.LinearExplainer(model, X_test_transformed)
+            explainer = shap.LinearExplainer(model, X_train_transformed)
 
         shap_values = explainer.shap_values(X_test_transformed)
 
         fig, ax = plt.subplots(figsize=(10, 6))
         if isinstance(shap_values, list):
-            shap.summary_plot(shap_values[1], X_test_transformed,
-                              feature_names=features, show=False)
+            shap.summary_plot(shap_values[1], X_test_transformed, feature_names=features, show=False)
         else:
-            shap.summary_plot(shap_values, X_test_transformed,
-                              feature_names=features, show=False)
+            shap.summary_plot(shap_values, X_test_transformed, feature_names=features, show=False)
         st.pyplot(fig, bbox_inches='tight')
         plt.close('all')
     except Exception as e:
         st.warning(f"SHAP summary plot could not be generated: {e}")
 
-elif page == "Patient Prediction":
-    st.title("Patient Prediction & Recommendations")
+# ---------- PATIENT PREDICTION ----------
+elif page == " Patient Prediction":
+    st.title("🩺 Patient Prediction & Recommendations")
     st.markdown("Enter the patient's clinical parameters to predict event risk.")
 
     col1, col2 = st.columns(2)
@@ -217,7 +221,7 @@ elif page == "Patient Prediction":
         urban_clinic = st.selectbox("Urban Clinic", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
         SBP_ge120 = st.selectbox("SBP >= 120", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
 
-    if st.button("Predict Risk"):
+    if st.button("🚀 Predict Risk", type="primary"):
         input_data = pd.DataFrame([{
             'DBP': float(DBP),
             'SBP': float(SBP),
@@ -233,7 +237,6 @@ elif page == "Patient Prediction":
             'SBP_ge120': int(SBP_ge120)
         }])
 
-        pipeline = pipelines[selected_model_name]
         prob = pipeline.predict_proba(input_data)[0, 1]
         prob_pct = prob * 100
 
@@ -244,29 +247,30 @@ elif page == "Patient Prediction":
         with col_b:
             st.metric("Predicted Event Probability", f"{prob_pct:.2f}%")
 
-        st.subheader("Clinical Recommendation")
+        st.subheader(" Clinical Recommendation")
         if prob <= 0.30:
-            st.success(f"**Low Risk ({prob_pct:.2f}%)** — Routine monitoring and standard care.")
+            st.success(f"🟢 **Low Risk ({prob_pct:.2f}%)** — Routine monitoring and standard care.")
         elif prob <= 0.50:
-            st.warning(f"**Moderate Risk ({prob_pct:.2f}%)** — Increased surveillance, lifestyle interventions.")
+            st.warning(f"🟡 **Moderate Risk ({prob_pct:.2f}%)** — Increased surveillance, lifestyle interventions.")
         elif prob <= 0.70:
-            st.error(f"**High Risk ({prob_pct:.2f}%)** — Medical review, potential pharmacological intervention.")
+            st.error(f"🟠 **High Risk ({prob_pct:.2f}%)** — Medical review, potential pharmacological intervention.")
         else:
-            st.error(f"**Critical Risk ({prob_pct:.2f}%)** — Immediate clinical intervention required.")
+            st.error(f"🔴 **Critical Risk ({prob_pct:.2f}%)** — Immediate clinical intervention required.")
 
         st.markdown("---")
-        st.subheader("Explainable AI — Local SHAP Waterfall")
+        st.subheader("🧠 Explainable AI — Local SHAP Waterfall")
         st.markdown("How each feature pushed the prediction for **this specific patient**:")
 
         try:
-            model = pipeline.named_steps['classifier']
-            preprocessor = pipeline.named_steps['preprocessor']
-            input_transformed = preprocessor.transform(input_data)
+            model = pipeline.named_steps['classifier'] if hasattr(pipeline, 'named_steps') else pipeline
+            preprocessor = pipeline.named_steps['preprocessor'] if hasattr(pipeline, 'named_steps') else None
+
+            input_transformed = preprocessor.transform(input_data) if preprocessor is not None else input_data
 
             if hasattr(model, 'tree_'):
                 explainer = shap.TreeExplainer(model)
             else:
-                explainer = shap.LinearExplainer(model, X_test)
+                explainer = shap.LinearExplainer(model, X_train_transformed)
 
             shap_values = explainer.shap_values(input_transformed)
 
