@@ -1,4 +1,3 @@
-# --- PREDICTION ---
 elif page == "Patient Prediction":
     st.title("👤 Patient Prediction")
     st.markdown("Enter patient details to predict risk.")
@@ -51,19 +50,19 @@ elif page == "Patient Prediction":
             
             # Handle different SHAP value formats
             if isinstance(shap_values, list):
-                # For some models, SHAP returns a list
+                # For tree-based models with binary classification
                 shap_vals = shap_values[1][0]  # Get SHAP values for positive class, first sample
                 base_value = explainer.expected_value[1]
             elif len(shap_values.shape) == 3:
-                # For tree-based models with binary classification (n_samples, n_features, n_classes)
+                # Shape is (n_samples, n_features, n_classes)
                 shap_vals = shap_values[0, :, 1]  # First sample, all features, positive class
-                base_value = explainer.expected_value[1]
+                base_value = explainer.expected_value[1] if hasattr(explainer.expected_value, '__len__') else explainer.expected_value
+            elif len(shap_values.shape) == 2:
+                # Shape is (n_samples, n_features)
+                shap_vals = shap_values[0]  # First sample
+                base_value = explainer.expected_value
             else:
-                # For linear models or when shap_values is a 2D array
-                if len(shap_values.shape) == 2:
-                    shap_vals = shap_values[0]  # First sample
-                else:
-                    shap_vals = shap_values
+                shap_vals = shap_values
                 base_value = explainer.expected_value
             
             # Create waterfall plot
